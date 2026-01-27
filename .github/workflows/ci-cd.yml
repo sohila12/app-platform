@@ -2,13 +2,14 @@ name: CI (Quality + Security + Docker)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
-  contents: read
+  contents: write
   security-events: write
+  id-token: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -19,12 +20,14 @@ env:
 
 jobs:
   security_and_build:
+    name: CI (Quality + Security + Docker)
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       # -------------------------------
-      # SonarQube (Self-hosted via ngrok)
+      # SonarQube (Self-hosted via tunnel)
       # -------------------------------
       - name: SonarQube Scan (self-hosted)
         uses: SonarSource/sonarqube-scan-action@v6
@@ -56,7 +59,7 @@ jobs:
           path: dependency-check-report
 
       # -------------------------------
-      # Docker Build
+      # Docker Build (local)
       # -------------------------------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -86,3 +89,90 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
+
+  push_and_gitops:
+    name: CD (ECR Push + GitOps Update)
+    needs: security_and_build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 1) Skip CD if teammate secrets/vars aren't present in this repo yet
+      - name: Check CD inputs exist
+        id: check
+        shell: bash
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_ARN }}" || -z "${{ vars.AWS_REGION }}" || -z "${{ vars.ECR_REGISTRY }}" || -z "${{ vars.ECR_REPOSITORY }}" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "CD inputs missing -> skipping CD (expected on teammate repo)."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 2) Configure AWS via OIDC
+      - name: Configure AWS credentials (OIDC)
+        if: steps.check.outputs.skip == 'false'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # 3) Login to ECR
+      - name: Login to Amazon ECR
+        if: steps.check.outputs.skip == 'false'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 4) Build & Push Image to ECR (tag = commit sha)
+      - name: Build & Push image to ECR
+        if: steps.check.outputs.skip == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 5) Update kustomize overlay tag (GitOps)
+      - name: Update k8s dev overlay image (newName/newTag)
+        if: steps.check.outputs.skip == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="k8s/overlays/dev/kustomization.yaml"
+
+          # Ensure images block exists (so edit won't silently fail)
+          if ! grep -qE '^\s*images:\s*$' "$FILE"; then
+            echo "ERROR: kustomization.yaml has no 'images:' block. Add it first."
+            exit 1
+          fi
+
+          python - <<'PY'
+import re, pathlib
+p = pathlib.Path("k8s/overlays/dev/kustomization.yaml")
+s = p.read_text(encoding="utf-8")
+
+# Update newName/newTag inside the overlay (assumes they exist)
+s = re.sub(r'(^\s*newName:\s*).+$', r'\1' + "${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}", s, flags=re.M)
+s = re.sub(r'(^\s*newTag:\s*).+$', r'\1' + "${{ github.sha }}", s, flags=re.M)
+
+p.write_text(s, encoding="utf-8")
+PY
+
+          echo "Updated:"
+          grep -nE 'newName:|newTag:' "$FILE"
+
+      # 6) Commit & push manifest change (triggers ArgoCD)
+      - name: Commit & push GitOps change
+        if: steps.check.outputs.skip == 'false'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/overlays/dev/kustomization.yaml
+          git commit -m "gitops: deploy ${{ github.sha }} to dev" || echo "No changes to commit"
+          git push
