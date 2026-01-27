@@ -1,0 +1,29 @@
+name: CI (Bootstrap)
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-repo-structure:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show repo tree
+        run: |
+          ls -la
+          find . -maxdepth 4 -type f | sort
+
+      - name: Validate k8s files exist
+        run: |
+          test -f k8s/base/deployment.yaml
+          test -f k8s/base/service.yaml
+          test -f k8s/base/kustomization.yaml
+          test -f k8s/overlays/dev/kustomization.yaml
+          echo "K8s structure OK ✅"
