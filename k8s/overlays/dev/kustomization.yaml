@@ -1,3 +1,8 @@
 resources:
   - ../../base
 namePrefix: dev-
+
+images:
+  - name: app
+    newName: app
+    newTag: dev-local
