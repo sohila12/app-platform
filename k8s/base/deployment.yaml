@@ -1,16 +1,16 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: app-service
+  name: app-service-gitops
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: app-service
+      app: app-service-gitops
   template:
     metadata:
       labels:
-        app: app-service
+        app: app-service-gitops
     spec:
       containers:
         - name: app
