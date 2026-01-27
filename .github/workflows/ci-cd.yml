@@ -27,7 +27,7 @@ jobs:
       # SonarQube (Self-hosted via ngrok)
       # -------------------------------
       - name: SonarQube Scan (self-hosted)
-        uses: SonarSource/sonarqube-scan-action@v4
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
@@ -36,6 +36,7 @@ jobs:
             -Dsonar.projectKey=app-platform
             -Dsonar.sources=.
             -Dsonar.exclusions=**/.git/**,**/.github/**,**/k8s/**,**/*.md,**/infra/**
+            -Dsonar.scanner.userAgent=github-actions-sonar
 
       # -------------------------------
       # OWASP Dependency Check
