@@ -4,5 +4,5 @@ namePrefix: dev-
 
 images:
   - name: app
-    newName: app
+    newName: REPLACE_ECR_REGISTRY/REPLACE_ECR_REPOSITORY
     newTag: dev-local
