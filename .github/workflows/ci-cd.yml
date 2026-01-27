@@ -1,4 +1,4 @@
-name: CI (Security + Docker)
+name: CI (Quality + Security + Docker)
 
 on:
   push:
@@ -22,6 +22,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # -------------------------------
+      # SonarQube (Self-hosted via ngrok)
+      # -------------------------------
+      - name: SonarQube Scan (self-hosted)
+        uses: SonarSource/sonarqube-scan-action@v4
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=app-platform
+            -Dsonar.sources=.
+            -Dsonar.exclusions=**/.git/**,**/.github/**,**/k8s/**,**/*.md,**/infra/**
 
       # -------------------------------
       # OWASP Dependency Check
