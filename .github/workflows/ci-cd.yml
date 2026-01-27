@@ -2,13 +2,14 @@ name: CI (Quality + Security + Docker)
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
-  contents: read
+  contents: write
   security-events: write
+  id-token: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -19,14 +20,28 @@ env:
 
 jobs:
   security_and_build:
+    name: CI (Quality + Security + Docker)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       # -------------------------------
-      # SonarQube (Self-hosted via ngrok)
+      # SonarQube (Self-hosted)
+      # (Make it optional so PRs won't fail if vars/secrets not present)
       # -------------------------------
+      - name: Check Sonar inputs exist
+        id: sonarcheck
+        shell: bash
+        run: |
+          if [[ -z "${{ secrets.SONAR_TOKEN }}" || -z "${{ vars.SONAR_HOST_URL }}" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Sonar inputs missing -> skipping SonarQube scan."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: SonarQube Scan (self-hosted)
+        if: steps.sonarcheck.outputs.skip == 'false'
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -56,7 +71,7 @@ jobs:
           path: dependency-check-report
 
       # -------------------------------
-      # Docker Build
+      # Docker Build (local)
       # -------------------------------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -71,7 +86,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       # -------------------------------
-      # Trivy Scan
+      # Trivy Scan + SARIF
       # -------------------------------
       - name: Trivy scan (SARIF)
         uses: aquasecurity/trivy-action@0.24.0
@@ -83,6 +98,81 @@ jobs:
           severity: HIGH,CRITICAL
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
+
+  push_and_gitops:
+    name: CD (ECR Push + GitOps Update)
+    needs: security_and_build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 1) Skip CD if teammate secrets/vars aren't present
+      - name: Check CD inputs exist
+        id: check
+        shell: bash
+        run: |
+          if [[ -z "${{ secrets.AWS_ROLE_ARN }}" || -z "${{ vars.AWS_REGION }}" || -z "${{ vars.ECR_REGISTRY }}" || -z "${{ vars.ECR_REPOSITORY }}" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "CD inputs missing -> skipping CD (expected on teammate repo)."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 2) Configure AWS via OIDC
+      - name: Configure AWS credentials (OIDC)
+        if: steps.check.outputs.skip == 'false'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # 3) Login to ECR
+      - name: Login to Amazon ECR
+        if: steps.check.outputs.skip == 'false'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # 4) Build & Push Image to ECR
+      - name: Build & Push image to ECR
+        if: steps.check.outputs.skip == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # 5) Update dev overlay (GitOps)
+      - name: Update k8s dev overlay image (newName/newTag)
+      
+        if: steps.check.outputs.skip == 'false'
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="k8s/overlays/dev/kustomization.yaml"
+          
+          # Update newName
+          sed -i "s|newName:.*|newName: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}|" "$FILE"
+          
+          # Update newTag
+          sed -i "s|newTag:.*|newTag: ${{ github.sha }}|" "$FILE"
+          
+          echo "Updated:"
+          grep -nE 'newName:|newTag:' "$FILE"
+
+      # 6) Commit & push manifest change
+      - name: Commit & push GitOps change
+        if: steps.check.outputs.skip == 'false'
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/overlays/dev/kustomization.yaml
+          git commit -m "gitops: deploy ${{ github.sha }} to dev" || echo "No changes to commit"
+          git push
