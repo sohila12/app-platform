@@ -1,0 +1,19 @@
+
+on:
+  push:
+    branches: [ "main", "test/ci-flow" ]
+    paths:
+      - "src/frontend/**"
+  pull_request:
+    paths:
+      - "src/frontend/**"
+
+jobs:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+        with:
+          projectBaseDir: src/frontend
+        env:

@@ -27,18 +27,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # SonarQube (optional)
-      - name: SonarQube Scan (Backend)
-        if: ${{ vars.SONAR_HOST_URL != '' && secrets.SONAR_TOKEN != '' }}
-        uses: SonarSource/sonarqube-scan-action@v6
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
         with:
           args: >
-            -Dsonar.projectKey=app-platform-backend
-            -Dsonar.sources=src/backend
-            -Dsonar.exclusions=**/.git/**,**/.github/**,**/k8s/**,**/*.md,**/infra/**
 
       - name: OWASP Dependency-Check (Backend)
         uses: dependency-check/Dependency-Check_Action@main

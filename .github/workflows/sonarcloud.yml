@@ -1,0 +1,26 @@
+name: SonarCloud Scan
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "src/**"
+      - "sonar-project.properties"
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "src/**"
+      - "sonar-project.properties"
+
+jobs:
+  sonarcloud:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
