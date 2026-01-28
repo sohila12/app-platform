@@ -1,4 +1,4 @@
-name: CI (Quality + Security + Docker)
+name: CI/CD (Quality + Security + Docker + GitOps)
 
 on:
   push:
@@ -16,32 +16,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_NAME: local/app-platform:${{ github.sha }}
+  LOCAL_IMAGE: local/app-platform:${{ github.sha }}
 
 jobs:
-  security_and_build:
-    name: CI (Quality + Security + Docker)
+  ci:
+    name: CI (Quality + Security)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # -------------------------------
-      # SonarQube (Self-hosted)
-      # (Make it optional so PRs won't fail if vars/secrets not present)
-      # -------------------------------
-      - name: Check Sonar inputs exist
-        id: sonarcheck
-        shell: bash
-        run: |
-          if [[ -z "${{ secrets.SONAR_TOKEN }}" || -z "${{ vars.SONAR_HOST_URL }}" ]]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Sonar inputs missing -> skipping SonarQube scan."
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: SonarQube Scan (self-hosted)
-        if: steps.sonarcheck.outputs.skip == 'false'
+      # ---------- SonarQube ----------
+      - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -51,11 +36,8 @@ jobs:
             -Dsonar.projectKey=app-platform
             -Dsonar.sources=.
             -Dsonar.exclusions=**/.git/**,**/.github/**,**/k8s/**,**/*.md,**/infra/**
-            -Dsonar.scanner.userAgent=github-actions-sonar
 
-      # -------------------------------
-      # OWASP Dependency Check
-      # -------------------------------
+      # ---------- OWASP Dependency Check ----------
       - name: OWASP Dependency-Check
         uses: dependency-check/Dependency-Check_Action@main
         with:
@@ -70,9 +52,7 @@ jobs:
           name: dependency-check-report
           path: dependency-check-report
 
-      # -------------------------------
-      # Docker Build (local)
-      # -------------------------------
+      # ---------- Docker Build (local for scanning) ----------
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -81,50 +61,56 @@ jobs:
         with:
           context: .
           load: true
-          tags: ${{ env.IMAGE_NAME }}
+          tags: ${{ env.LOCAL_IMAGE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # -------------------------------
-      # Trivy Scan + SARIF
-      # -------------------------------
+      # ---------- Trivy Scan ----------
       - name: Trivy scan (SARIF)
         uses: aquasecurity/trivy-action@0.24.0
         with:
-          image-ref: ${{ env.IMAGE_NAME }}
+          image-ref: ${{ env.LOCAL_IMAGE }}
           format: sarif
           output: trivy.sarif
           ignore-unfixed: true
           severity: HIGH,CRITICAL
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
 
-  push_and_gitops:
+  cd_gitops:
     name: CD (ECR Push + GitOps Update)
-    needs: security_and_build
+    needs: ci
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 1) Skip CD if teammate secrets/vars aren't present
+      # 0) Validate required inputs exist (from teammate repo settings)
       - name: Check CD inputs exist
         id: check
         shell: bash
         run: |
-          if [[ -z "${{ secrets.AWS_ROLE_ARN }}" || -z "${{ vars.AWS_REGION }}" || -z "${{ vars.ECR_REGISTRY }}" || -z "${{ vars.ECR_REPOSITORY }}" ]]; then
+          set -e
+          missing=""
+          [[ -z "${{ secrets.AWS_ROLE_ARN }}" ]] && missing="$missing AWS_ROLE_ARN"
+          [[ -z "${{ vars.AWS_REGION }}" ]] && missing="$missing AWS_REGION"
+          [[ -z "${{ vars.ECR_REGISTRY }}" ]] && missing="$missing ECR_REGISTRY"
+          [[ -z "${{ vars.ECR_REPOSITORY }}" ]] && missing="$missing ECR_REPOSITORY"
+
+          if [[ -n "$missing" ]]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "CD inputs missing -> skipping CD (expected on teammate repo)."
+            echo "CD inputs missing:$missing -> skipping CD."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # 2) Configure AWS via OIDC
+      # 1) Configure AWS credentials via OIDC
       - name: Configure AWS credentials (OIDC)
         if: steps.check.outputs.skip == 'false'
         uses: aws-actions/configure-aws-credentials@v4
@@ -132,12 +118,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      # 3) Login to ECR
+      # 2) Login to ECR
       - name: Login to Amazon ECR
         if: steps.check.outputs.skip == 'false'
         uses: aws-actions/amazon-ecr-login@v2
 
-      # 4) Build & Push Image to ECR
+      # 3) Build & Push to ECR (tag = commit sha)
       - name: Build & Push image to ECR
         if: steps.check.outputs.skip == 'false'
         uses: docker/build-push-action@v6
@@ -148,31 +134,45 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # 5) Update dev overlay (GitOps)
-      - name: Update k8s dev overlay image (newName/newTag)
-      
+      # 4) Update kustomize overlays (dev + prod) to new image
+      - name: Install yq
         if: steps.check.outputs.skip == 'false'
         shell: bash
         run: |
-          set -euo pipefail
-          FILE="k8s/overlays/dev/kustomization.yaml"
-          
-          # Update newName
-          sed -i "s|newName:.*|newName: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}|" "$FILE"
-          
-          # Update newTag
-          sed -i "s|newTag:.*|newTag: ${{ github.sha }}|" "$FILE"
-          
-          echo "Updated:"
-          grep -nE 'newName:|newTag:' "$FILE"
+          set -e
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
 
-      # 6) Commit & push manifest change
+      - name: Update kustomize image (dev + prod)
+        if: steps.check.outputs.skip == 'false'
+        shell: bash
+        env:
+          ECR_IMAGE: ${{ vars.ECR_REGISTRY }}/${{ vars.ECR_REPOSITORY }}
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for FILE in k8s/overlays/dev/kustomization.yaml k8s/overlays/prod/kustomization.yaml; do
+            echo "Updating $FILE -> ${ECR_IMAGE}:${TAG}"
+
+            # update images[0].newName and images[0].newTag
+            yq -i '.images[0].newName = strenv(ECR_IMAGE)' "$FILE"
+            yq -i '.images[0].newTag  = strenv(TAG)' "$FILE"
+
+            echo "Result:"
+            yq '.images' "$FILE"
+          done
+
+
+      # 5) Commit & push GitOps change
       - name: Commit & push GitOps change
         if: steps.check.outputs.skip == 'false'
         shell: bash
         run: |
+          set -e
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/overlays/dev/kustomization.yaml
-          git commit -m "gitops: deploy ${{ github.sha }} to dev" || echo "No changes to commit"
+
+          git add k8s/overlays/dev/kustomization.yaml k8s/overlays/prod/kustomization.yaml
+          git commit -m "gitops: deploy ${GITHUB_SHA}" || echo "No changes to commit"
           git push
