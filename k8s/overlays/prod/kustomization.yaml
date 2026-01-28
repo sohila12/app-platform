@@ -3,6 +3,9 @@ resources:
 namePrefix: prod-
 
 images:
-  - name: app
-    newName: app
+  - name: frontend
+    newName: frontend
+    newTag: dev-local
+  - name: backend
+    newName: backend
     newTag: dev-local

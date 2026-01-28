@@ -1,0 +1,149 @@
+name: Frontend CI/CD (Quality + Security + Docker + GitOps)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "src/frontend/**"
+      - "k8s/**"
+      - ".github/workflows/ci-cd-frontend.yml"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "src/frontend/**"
+      - "k8s/**"
+      - ".github/workflows/ci-cd-frontend.yml"
+
+permissions:
+  contents: write
+  security-events: write
+  id-token: write
+
+env:
+  COMPONENT: frontend
+  LOCAL_IMAGE: local/app-frontend:${{ github.sha }}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SonarQube Scan (if configured)
+        if: ${{ vars.SONAR_HOST_URL != '' && secrets.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@v6
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+        with:
+          args: >
+            -Dsonar.projectKey=app-platform-frontend
+            -Dsonar.sources=src/frontend
+            -Dsonar.exclusions=**/.git/**,**/.github/**,**/k8s/**,**/*.md,**/infra/**
+
+      - name: OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: "app-platform-frontend"
+          path: "src/frontend"
+          format: "HTML"
+          out: "dependency-check-report-frontend"
+
+      - name: Upload OWASP artifact (GitHub)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-frontend
+          path: dependency-check-report-frontend
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image (local)
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/frontend
+          file: ./src/frontend/Dockerfile
+          load: true
+          tags: ${{ env.LOCAL_IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy scan (SARIF)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ env.LOCAL_IMAGE }}
+          format: sarif
+          output: trivy-frontend.sarif
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-frontend.sarif
+
+  cd:
+    needs: ci
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & Push image to ECR
+        uses: docker/build-push-action@v6
+        with:
+          context: ./src/frontend
+          file: ./src/frontend/Dockerfile
+          push: true
+          tags: ${{ vars.ECR_REGISTRY }}/app-platform-frontend:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Upload reports to S3
+        shell: bash
+        run: |
+          set -e
+          aws s3 cp trivy-frontend.sarif "s3://${{ vars.S3_ARTIFACTS_BUCKET }}/frontend/${GITHUB_SHA}/trivy.sarif"
+          tar -czf dependency-check-frontend.tgz dependency-check-report-frontend
+          aws s3 cp dependency-check-frontend.tgz "s3://${{ vars.S3_ARTIFACTS_BUCKET }}/frontend/${GITHUB_SHA}/dependency-check.tgz"
+
+      - name: Install yq
+        shell: bash
+        run: |
+          set -e
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Update kustomize image (dev+prod) for frontend
+        shell: bash
+        env:
+          ECR_IMAGE: ${{ vars.ECR_REGISTRY }}/app-platform-frontend
+          TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for FILE in k8s/overlays/dev/kustomization.yaml k8s/overlays/prod/kustomization.yaml; do
+            yq -i '(.images[] | select(.name=="frontend") ).newName = strenv(ECR_IMAGE)' "$FILE"
+            yq -i '(.images[] | select(.name=="frontend") ).newTag  = strenv(TAG)' "$FILE"
+          done
+
+      - name: Commit & push GitOps change
+        shell: bash
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/overlays/dev/kustomization.yaml k8s/overlays/prod/kustomization.yaml
+          git commit -m "gitops(frontend): deploy ${GITHUB_SHA}" || echo "No changes"
+          git push
