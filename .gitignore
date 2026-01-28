@@ -1,0 +1,10 @@
+
+# local backups
+*.bak
+
+# local-only folders (if generated locally)
+infra/sonarqube/.env
+infra/sonarqube/data/
+infra/sonarqube/logs/
+infra/sonarqube/extensions/
+

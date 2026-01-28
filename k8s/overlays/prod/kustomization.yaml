@@ -1,0 +1,8 @@
+resources:
+  - ../../base
+namePrefix: prod-
+
+images:
+  - name: app
+    newName: REPLACE_ECR_REGISTRY/REPLACE_ECR_REPOSITORY
+    newTag: initial
