@@ -7,4 +7,5 @@ commonLabels:
   env: dev
 
 patchesStrategicMerge:
+  - backend-deploy-labels-patch.yaml
   - backend-service-selector-patch.yaml
