@@ -1,6 +1,10 @@
 resources:
   - ../../base
+
 namePrefix: prod-
+
+commonLabels:
+  env: prod
 
 images:
   - name: frontend
@@ -9,9 +13,6 @@ images:
   - name: backend
     newName: backend
     newTag: dev-local
-
-commonLabels:
-  env: prod
 
 patchesStrategicMerge:
   - backend-service-selector-patch.yaml

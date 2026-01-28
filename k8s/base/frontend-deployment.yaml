@@ -16,6 +16,21 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: frontend
+          image: frontend:dev-local
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 80
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "128Mi"
+          limits:
+            cpu: "300m"
+            memory: "256Mi"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
