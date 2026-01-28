@@ -6,13 +6,5 @@ namePrefix: prod-
 commonLabels:
   env: prod
 
-images:
-  - name: frontend
-    newName: frontend
-    newTag: dev-local
-  - name: backend
-    newName: backend
-    newTag: dev-local
-
 patchesStrategicMerge:
   - backend-service-selector-patch.yaml
