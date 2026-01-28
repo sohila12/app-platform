@@ -24,9 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
 
       # ---------- SonarQube ----------
       - name: SonarQube Scan
+        if: >
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
         uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
@@ -36,6 +42,8 @@ jobs:
             -Dsonar.projectKey=app-platform
             -Dsonar.sources=.
             -Dsonar.exclusions=**/.git/**,**/.github/**,**/k8s/**,**/*.md,**/infra/**
+
+
 
       # ---------- OWASP Dependency Check ----------
       - name: OWASP Dependency-Check
