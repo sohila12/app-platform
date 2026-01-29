@@ -1,0 +1,40 @@
+
+# local backups
+*.bak
+
+# local-only folders (if generated locally)
+infra/sonarqube/.env
+infra/sonarqube/data/
+infra/sonarqube/logs/
+infra/sonarqube/extensions/
+
+
+# OS / editor
+*.bak
+*.tmp
+*.swp
+.DS_Store
+Thumbs.db
+
+# node
+node_modules/
+coverage/
+dist/
+build/
+
+# binaries (never commit)
+*.exe
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.zst
+
+# ArgoCD binaries / downloads
+argocd
+argocd.exe
+kustomize
+kustomize.exe
+k8s/overlays/**/argocd
+k8s/overlays/**/kustomize*
+node_modules/

@@ -9,6 +9,3 @@
 - [ ] OWASP Dependency Check report reviewed (artifact)
 - [ ] Trivy scan has no HIGH/CRITICAL blocking issues (Security tab)
 
-## Notes / Risks
-- Any new dependencies?
-- Any security considerations?

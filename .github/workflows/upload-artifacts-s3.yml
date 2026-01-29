@@ -1,0 +1,49 @@
+name: Upload Artifacts to S3
+
+on:
+  workflow_run:
+    workflows: ["CI - Frontend", "CI - Backend"]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+jobs:
+  upload_to_s3:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Download all artifacts from triggering workflow
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts to S3
+        env:
+          BUCKET: ${{ vars.S3_BUCKET_NAME }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          WF_NAME: ${{ github.event.workflow_run.name }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          echo "Uploading artifacts for workflow: $WF_NAME, run: $RUN_ID, sha: $SHA"
+          aws s3 cp artifacts "s3://${BUCKET}/github-actions/${WF_NAME}/${SHA}/" --recursive
+          echo "Done."
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{\"text\":\"❌ Workflow failed: ${{ github.workflow }} | Repo: ${{ github.repository }} | Run: ${{ github.run_id }}\"}" \
+          "${{ secrets.SLACK_WEBHOOK_URL }}"

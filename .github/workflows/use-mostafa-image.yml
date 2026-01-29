@@ -1,0 +1,32 @@
+name: Use Existing DockerHub Image (Pull & Test)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  pull-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull image
+        run: docker pull mostafagheta/netflix-clone:latest
+
+      - name: Run container
+        run: |
+          docker run -d --name netflix -p 8080:80 mostafagheta/netflix-clone:latest
+          sleep 5
+          docker ps
+          curl -I --retry 10 --retry-delay 2 http://localhost:8080 || (docker logs netflix && exit 1)
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f netflix || true
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{\"text\":\"❌ Workflow failed: ${{ github.workflow }} | Repo: ${{ github.repository }} | Run: ${{ github.run_id }}\"}" \
+          "${{ secrets.SLACK_WEBHOOK_URL }}"
