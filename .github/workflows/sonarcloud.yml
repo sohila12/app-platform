@@ -4,13 +4,13 @@ on:
   pull_request:
     branches: ["main"]
     paths:
-      - "Application-Code/**"
+      - "src/**"
       - "sonar-project.properties"
       - ".github/workflows/sonarcloud.yml"
   push:
     branches: ["main"]
     paths:
-      - "Application-Code/**"
+      - "src/**"
       - "sonar-project.properties"
       - ".github/workflows/sonarcloud.yml"
   workflow_dispatch:
@@ -60,10 +60,9 @@ jobs:
           args: >
             -Dsonar.organization=${{ vars.SONAR_ORG }}
             -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
-            -Dsonar.sources=Application-Code/src
+            -Dsonar.sources=src
             -Dsonar.exclusions=**/node_modules/**,**/dist/**,**/build/**
-            -Dsonar.javascript.lcov.reportPaths=Application-Code/coverage/lcov.info
-
+            
       - name: Notify Slack on failure
         if: failure()
         run: |
