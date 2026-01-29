@@ -37,3 +37,4 @@ kustomize
 kustomize.exe
 k8s/overlays/**/argocd
 k8s/overlays/**/kustomize*
+node_modules/
