@@ -40,3 +40,10 @@ jobs:
           echo "Uploading artifacts for workflow: $WF_NAME, run: $RUN_ID, sha: $SHA"
           aws s3 cp artifacts "s3://${BUCKET}/github-actions/${WF_NAME}/${SHA}/" --recursive
           echo "Done."
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{\"text\":\"❌ Workflow failed: ${{ github.workflow }} | Repo: ${{ github.repository }} | Run: ${{ github.run_id }}\"}" \
+          "${{ secrets.SLACK_WEBHOOK_URL }}"

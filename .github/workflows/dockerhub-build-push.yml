@@ -1,0 +1,78 @@
+name: CD - DockerHub Build & Push (Application-Code)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "Application-Code/**"
+      - ".github/workflows/dockerhub-build-push.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: cd-dockerhub-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  IMAGE_NAME: netflix-clone
+  DOCKER_CONTEXT: Application-Code
+  DOCKERFILE_PATH: Application-Code/Dockerfile
+
+jobs:
+  build_push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set tags
+        id: vars
+        run: |
+          echo "SHA_TAG=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "DATE_TAG=$(date +'%Y%m%d')" >> "$GITHUB_OUTPUT"
+
+      - name: Login DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & Push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ env.DOCKER_CONTEXT }}
+          file: ${{ env.DOCKERFILE_PATH }}
+          push: true
+          tags: |
+            ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
+            ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.SHA_TAG }}
+            ${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ steps.vars.outputs.DATE_TAG }}
+
+      - name: Update kustomize image tag (dev overlay) (if exists)
+        run: |
+          if [ -f "k8s/overlays/dev/kustomization.yaml" ]; then
+            echo "Updating k8s/overlays/dev/kustomization.yaml image tag..."
+            # set image name + newTag to sha
+            perl -0777 -pi -e 's#(newName:\s*).*\n#$1'"${{ vars.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}"'\n#gms' k8s/overlays/dev/kustomization.yaml || true
+            perl -0777 -pi -e 's#(newTag:\s*).*\n#$1'"${{ steps.vars.outputs.SHA_TAG }}"'\n#gms' k8s/overlays/dev/kustomization.yaml || true
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add k8s/overlays/dev/kustomization.yaml
+            git commit -m "chore(gitops): bump dev image tag to ${{ steps.vars.outputs.SHA_TAG }}" || echo "No changes"
+            git push || echo "No push"
+          else
+            echo "No kustomization.yaml found, skipping."
+          fi
+
+      - name: Notify Slack on failure
+        if: failure()
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+          --data "{\"text\":\"❌ Workflow failed: ${{ github.workflow }} | Repo: ${{ github.repository }} | Run: ${{ github.run_id }}\"}" \
+          "${{ secrets.SLACK_WEBHOOK_URL }}"
