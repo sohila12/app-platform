@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-platform-prod
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/sohila12/app-platform.git
+    targetRevision: test/ci-flow
+    path: k8s/overlays/prod
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
